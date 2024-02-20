@@ -143,62 +143,70 @@ order by [Revenue created by Particular item] desc
 
 /* Calculating stats like profit per year , profit per item , profit per centage per year */
 
-
-drop table if exists #RevenueperdayPerItem
-select distinct s.Date , s.[Item Code],
-(
-SUM(CAST([Quantity Sold (kilo)] as decimal(16,2))*cast([Unit Selling Price (RMB kg)] as decimal(16,2)) )
-) as [total SP]
-,(
-SUM(CAST([Quantity Sold (kilo)] as decimal(16,2)))--*cast(i.[Wholesale Price (RMB kg)] as decimal(16,2)) 
+drop table if exists #ProfitPerItem1
+;with cte as (
+	select distinct s.Date , s.[Item Code],
+	(
+		SUM(CAST([Quantity Sold (kilo)] as decimal(16,2))*cast([Unit Selling Price (RMB kg)] as decimal(16,2)) ) over (partition by s.[Item Code],s.Date)
+	) as [total SP]
+	,(
+		SUM(CAST([Quantity Sold (kilo)] as decimal(16,2))*cast([Wholesale Price (RMB kg)] as decimal(16,2)) ) over (partition by s.[Item Code],s.Date)
+	) as [total CP]
+	from dbo.Sales s(nolock)
+	inner join dbo.ItemsWithwhosesaleprice i(nolock) on i.[item code]=s.[item code]
+		and s.[Date]=i.Date
 )
-as [Quantity Sold]
-into #RevenueperdayPerItem
-from dbo.Sales s(nolock)
-where 1=1
-group by s.[Item Code],s.Date
+select c.* , (c.[total SP]-c.[total CP]) [Total Profit per item] 
+INTO #ProfitPerItem1
+from cte c
 
-drop table if exists #CostPricePerDay
-select c.[Item Code] ,c.date, SUM([Quantity Sold]*i.[Wholesale Price (RMB kg)]) as [totalCP],[total SP]
-INTO #CostPricePerDay
-from #RevenueperdayPerItem c
-inner join dbo.ItemsWithwhosesaleprice i(nolock) on i.[item code]=c.[item code]
-and c.[Date]=i.Date
-group by c.[Item Code] ,[total SP],c.Date
+drop table if exists #SalesAndCostPrice
+select distinct s.Date , s.[Item Code],
+	(
+		SUM(CAST([Quantity Sold (kilo)] as decimal(16,2))*cast([Unit Selling Price (RMB kg)] as decimal(16,2)) ) over (partition by s.[Item Code],s.Date)
+	) as [total SP]
+	,(
+		SUM(CAST([Quantity Sold (kilo)] as decimal(16,2))*cast([Wholesale Price (RMB kg)] as decimal(16,2)) ) over (partition by s.[Item Code],s.Date)
+	) as [total CP]
+	into #SalesAndCostPrice
+	from dbo.Sales s(nolock)
+	inner join dbo.ItemsWithwhosesaleprice i(nolock) on i.[item code]=s.[item code]
+		and s.[Date]=i.Date
 
-select [Item Code],SUM([total SP]-[TotalCP]) [total Profit per item]
-from #CostPricePerDay
-group by [Item Code]
+drop table if exists #ProfitPerItem
+select c.* , (c.[total SP]-c.[total CP]) [Total Profit per item] 
+INTO #ProfitPerItem
+from #SalesAndCostPrice c
 
 --Profit per year
-select YEAR(cast ([date] as date)) as [Year], SUM([total SP]-[TotalCP]) [Total Profit per year]
-from #CostPricePerDay
+select YEAR(cast ([date] as date)) as [Year], SUM([Total Profit per item] ) [Total Profit per year]
+from #ProfitPerItem
 group by YEAR(cast ([date] as date))
 
 --profit per year per category
-select YEAR(cast ([date] as date)) as [Year],i.[Category Name], SUM([total SP]-[TotalCP]) [Total Profit per year]
-from #CostPricePerDay c
+select YEAR(cast ([date] as date)) as [Year],i.[Category Name], SUM([Total Profit per item]) [Total Profit per year]
+from #ProfitPerItem c
 inner join dbo.ItemDetails i(nolock) on i.[Item Code]=c.[Item Code]
 group by YEAR(cast ([date] as date)),i.[Category Name]
 
 drop table if exists #Stats
-select [date],[Item Code],[Total SP],[totalCP], 
-CASE WHEN SUM([total SP]-[totalCP]) <0 then 0 else SUM([total SP]-[totalCP]) end [Total Profit per day per item],  
-CASE WHEN SUM([totalCP]-[total SP]) <0 then 0 else SUM([totalCP]-[total SP]) end [Total Loss per day per item]
+select [date],[Item Code],[Total SP],[total CP], 
+CASE WHEN SUM([Total Profit per item]) <0 then 0 else SUM([Total Profit per item]) end [Total Profit per day per item],  
+CASE WHEN SUM([total CP]-[total SP]) <0 then 0 else SUM([total CP]-[total SP]) end [Total Loss per day per item]
 into #Stats
-from #CostPricePerDay
-group by [date],[Item Code],[Total SP],[totalCP]
+from #ProfitPerItem
+group by [date],[Item Code],[Total SP],[total CP]
 
 --Profit percentage per year
-select (SUM([Total Profit per day per item])/SUM([totalCP]))*100 [Profit percentage per year],YEAR(cast ([date] as date)) as [Year]
+select (SUM([Total Profit per day per item])/SUM([total CP]))*100 [Profit percentage per year],YEAR(cast ([date] as date)) as [Year]
 from #Stats
 group by YEAR(cast ([date] as date)) 
 
 /* PIVOT Table for getting data category wise which means [year] will be column */
 drop table #DataProfitPerYearPerCategory
-select distinct YEAR(cast ([date] as date)) as[Year],i.[Category Name], SUM([total SP]-[TotalCP]) as [Profit per year per category]
+select distinct YEAR(cast ([date] as date)) as[Year],i.[Category Name], SUM([Total Profit per item]) as [Profit per year per category]
 into #DataProfitPerYearPerCategory
-from #CostPricePerDay c
+from #ProfitPerItem c
 inner join dbo.ItemDetails i(nolock) on i.[Item Code]=c.[Item Code]
 group by YEAR(cast ([date] as date)),i.[Category Name]
 order by 1 , 2
